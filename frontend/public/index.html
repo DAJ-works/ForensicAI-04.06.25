@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta
+      name="description"
+      content="ForensicAI - Forensic Video Analysis Platform"
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
+    <!-- Preconnect to speed up font loading -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    
+    <!-- Load fonts in one request for better performance -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    
+    <!-- Use optimal font display strategy -->
+    <style>
+      /* Font loading optimization */
+      @font-face {
+        font-family: 'Inter';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url(https://fonts.gstatic.com/s/inter/v13/UcC73FwrK3iLTeHuS_fvQtMwCp50KnMa25L7SUc.woff2) format('woff2');
+      }
+      
+      /* Initial content placeholder */
+      #root:empty {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #f8fafc;
+      }
+      
+      #root:empty::after {
+        content: "Loading ForensicAI...";
+        color: #64748b;
+        font-family: 'Inter', sans-serif;
+        font-size: 16px;
+      }
+    </style>
+    
+    <title>ForensicAI - Forensic Analysis Platform</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this application.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

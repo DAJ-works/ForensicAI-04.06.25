@@ -1,0 +1,9 @@
+# Ignore large files
+*.pt
+*.mp4
+*.mov
+*.avi
+backend/ML/
+backend/api/data/
+__pycache__/
+.DS_Store

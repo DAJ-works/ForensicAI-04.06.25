@@ -1,0 +1,214 @@
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f8fafc;
+  overflow-x: hidden;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Modern scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Active navigation styling */
+.active-nav-item {
+  background-color: rgba(59, 130, 246, 0.1);
+  color: #2563eb !important;
+}
+
+/* Transition effects */
+.fade-in {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Pulse animation */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+/* Glow animation for buttons */
+.glow-effect {
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-effect::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 70%);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.glow-effect:hover::after {
+  opacity: 1;
+}
+
+/* Fix for container width and alignment issues */
+.MuiContainer-root {
+  max-width: 100% !important;
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+}
+
+@media (min-width: 600px) {
+  .MuiContainer-root {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+  }
+}
+
+/* Fix for card content padding */
+.MuiCardContent-root:last-child {
+  padding-bottom: 16px !important;
+}
+
+/* Date time display - monospace font for better readability */
+.datetime-display {
+  font-family: 'Roboto Mono', monospace;
+  letter-spacing: 0.5px;
+}
+
+/* Gradient text effect */
+.gradient-text {
+  background: linear-gradient(to right, #2563eb, #9333ea);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Fix for Grid container and item spacing */
+.MuiGrid-container {
+  width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.MuiGrid-item {
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+/* Sparkle animation for special elements */
+.sparkle {
+  position: relative;
+}
+
+.sparkle::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(circle, white 1px, transparent 1px),
+    radial-gradient(circle, white 1px, transparent 1px),
+    radial-gradient(circle, white 1px, transparent 1px);
+  background-size: 10px 10px;
+  background-position: 0 0, 5px 5px, 10px 10px;
+  animation: sparkle 2s linear infinite;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sparkle:hover::before {
+  opacity: 0.5;
+}
+
+@keyframes sparkle {
+  0% { transform: translateY(0); opacity: 0; }
+  50% { opacity: 0.5; }
+  100% { transform: translateY(-20px); opacity: 0; }
+}
+
+/* Floating animation for cards */
+.float-effect {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+/* Fix for fixed positioning */
+.MuiAppBar-root {
+  backdrop-filter: blur(8px);
+}
+
+/* Fix for potential text overflow issues */
+.MuiTypography-root {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+/* Ensure content stays properly aligned */
+.MuiBox-root {
+  max-width: 100%;
+}
+
+/* Fix table width issues */
+.MuiTable-root {
+  width: 100% !important;
+  table-layout: fixed !important;
+}
+
+/* Fix padding for smaller screens */
+@media (max-width: 600px) {
+  .MuiTableCell-root {
+    padding: 8px !important;
+  }
+  
+  .MuiToolbar-root {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}
+
+/* Fix drawer width for mobile */
+@media (max-width: 900px) {
+  .MuiDrawer-paper {
+    width: 250px !important;
+  }
+}

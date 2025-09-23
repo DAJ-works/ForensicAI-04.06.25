@@ -1,0 +1,10 @@
+# Person Re-identification
+torch>=1.9.0
+torchvision>=0.10.0
+torchreid  # Person ReID library
+faiss-cpu>=1.7.2  # Fast similarity search (use faiss-cpu if no GPU)
+scikit-learn>=1.0.0
+opencv-python>=4.5.0
+numpy>=1.20.0
+matplotlib>=3.4.0
+Pillow>=8.3.0
