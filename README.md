@@ -3,7 +3,7 @@
 #### Developers: Dhruv Kothari, Aarav Goel, Jayanth Veerappa
 #### Los Altos Hacks 2025 - Winners: 1st Place
 
-CCTV Insight Analyzer is a powerful application designed to help users extract actionable intelligence from CCTV footage. By combining computer vision and large language models (LLMs), this tool automatically analyzes video input and presents a comprehensive breakdown of events, individuals, and objects, all through a clean and interactive interface.
+ForensicAI is a powerful application designed to help users extract actionable intelligence from CCTV footage. By combining computer vision and large language models (LLMs), this tool automatically analyzes video input and presents a comprehensive breakdown of events, individuals, and objects, all through a clean and interactive interface.
 
 ## What It Does
 Simply upload a CCTV video, and the application will:
