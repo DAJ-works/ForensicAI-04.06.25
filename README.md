@@ -40,7 +40,7 @@ Simply upload a CCTV video, and the application will:
 
 **Video Processing**: OpenCV, YOLOv8, PyTorch
 
-**LLM Integration**: HuggingFace
+**LLM Integration**: HuggingFace.
 
 
 # Getting Started
