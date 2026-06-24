@@ -23,7 +23,7 @@ import axios from 'axios';
 
 // Current date and user info from latest request
 const CURRENT_DATE = '2025-04-06 08:44:28';
-const CURRENT_USER = 'aaravgoel0';
+const CURRENT_USER = process.env.REACT_APP_CURRENT_USER || 'unknown_user';
 
 // Styled components for custom video player UI
 const VideoContainer = styled(Box)(({ theme }) => ({

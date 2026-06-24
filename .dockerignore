@@ -1,0 +1,23 @@
+# Version control / CI
+.git/
+.gitignore
+
+# Python virtualenv (committed by mistake) and caches
+source/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Frontend (not part of the backend image)
+frontend/
+node_modules/
+
+# Local data / generated output / logs
+backend/debug_output/
+data/
+*.log
+
+# Secrets
+.env
+frontend/.env

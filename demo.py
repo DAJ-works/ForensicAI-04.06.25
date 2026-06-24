@@ -2,8 +2,11 @@
 import torch
 import os
 
-# Path to your model
-model_path = "/Users/sachin/Downloads/CaseAnalytics-main/backend/models/weapon_detect.pt"
+# Path to your model (configurable via WEAPON_MODEL_PATH env var)
+model_path = os.environ.get(
+    "WEAPON_MODEL_PATH",
+    os.path.join("backend", "models", "weapon_detect.pt"),
+)
 
 # Check if model exists
 if not os.path.exists(model_path):

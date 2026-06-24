@@ -36,7 +36,7 @@ function CaseList() {
 
   // Current date and user information
   const CURRENT_DATE = '2025-04-06 09:46:11';
-  const CURRENT_USER = 'aaravgoel0';
+  const CURRENT_USER = process.env.REACT_APP_CURRENT_USER || 'unknown_user';
 
   useEffect(() => {
     async function fetchCases() {

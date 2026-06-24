@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 SYSTEM_INFO = {
     "date": "2025-04-06",
     "version": "2.1.0",
-    "user": "aaravgoel0"
+    "user": os.environ.get("DEFAULT_USER", "unknown_user")
 }
 
 def preprocess_case_data(case_data: Dict[str, Any]) -> Dict[str, Any]:

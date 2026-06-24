@@ -1,0 +1,44 @@
+# Development stack for ForensicAI: Flask backend + React dev server.
+# Usage:
+#   cp .env.example .env                 # set API_KEY, CORS_ORIGINS, ...
+#   cp frontend/.env.example frontend/.env
+#   docker compose up --build
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist uploaded videos and analysis output across restarts.
+      - ./data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-slim
+    working_dir: /app
+    env_file:
+      - ./frontend/.env
+    environment:
+      # Enable file-watching in containers (CRA hot reload).
+      - CHOKIDAR_USEPOLLING=true
+      # The dev-server proxy (src/setupProxy.js) forwards /api to the backend
+      # service. Inside the compose network that's http://backend:5000, not
+      # localhost (which would be the frontend container itself).
+      - PROXY_TARGET=http://backend:5000
+      # Keep axios on relative URLs so it uses the proxy (and gets the key).
+      - REACT_APP_API_URL=
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      # Keep container's node_modules separate from the host mount.
+      - /app/node_modules
+    command: sh -c "npm install && npm start"
+    depends_on:
+      - backend
+    restart: unless-stopped

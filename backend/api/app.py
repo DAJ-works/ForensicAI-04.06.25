@@ -1,8 +1,12 @@
 import os
 import sys
+import re
 import json
 import time
+import shutil
 import logging
+import sqlite3
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -10,8 +14,10 @@ from typing import List, Dict, Optional
 from queue import Queue
 from threading import Lock
 
+import cv2
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 from huggingface_hub import InferenceClient
 import requests
@@ -29,6 +35,7 @@ from backend.models.person_reid import PersonReidentifier
 from backend.models.enhanced_filter import EnhancedFilter
 from backend.models.two_stage_detector import TwoStageDetector
 from backend.models.weapon_detector import WeaponDetector
+from backend.api.chat_service import generate_chat_response
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -41,9 +48,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='../../frontend/build')
-CORS(app)  # Enable CORS for all routes
 
-DATA_DIR = Path("./data")
+# Restrict CORS to the origins configured in CORS_ORIGINS (.env), instead of
+# allowing any origin. Fail closed: refuse to start if none are configured.
+from backend.api.auth import init_auth, get_allowed_origins
+allowed_origins = get_allowed_origins()
+if not allowed_origins:
+    raise RuntimeError(
+        "CORS_ORIGINS is not set. Define a comma-separated list of allowed "
+        "origins in your .env file (e.g. http://localhost:3000)."
+    )
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}},
+     supports_credentials=True)
+logger.info("CORS restricted to origins: %s", allowed_origins)
+
+# Require X-API-Key on all /api/* routes (key loaded from .env).
+init_auth(app)
+
+# Resolve to an absolute path. Flask's send_from_directory interprets a
+# relative directory against the app's root_path (backend/api), not the CWD,
+# so a relative DATA_DIR makes video/thumbnail downloads 404. Absolute avoids that.
+DATA_DIR = Path("./data").resolve()
 UPLOAD_FOLDER = DATA_DIR / "uploads"
 ANALYSIS_FOLDER = DATA_DIR / "analysis"
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -53,8 +78,116 @@ logger.info(f"Data directory: {DATA_DIR.absolute()}")
 logger.info(f"Upload folder: {UPLOAD_FOLDER.absolute()}")
 logger.info(f"Analysis folder: {ANALYSIS_FOLDER.absolute()}")
 
+
+def resolve_upload_path(video_path):
+    """Resolve a user-supplied video path and ensure it stays inside UPLOAD_FOLDER.
+
+    Returns the resolved absolute path as a string, or None if the path is
+    missing or escapes the upload directory (path injection / traversal).
+    """
+    if not video_path:
+        return None
+
+    upload_root = UPLOAD_FOLDER.resolve()
+    try:
+        candidate = Path(video_path).resolve()
+    except (OSError, ValueError):
+        return None
+
+    # candidate must be the upload root itself or a descendant of it.
+    if candidate != upload_root and upload_root not in candidate.parents:
+        return None
+
+    return str(candidate)
+
+
+def relativize_path(path, base):
+    """Return ``path`` as a string relative to ``base`` if it lives under it.
+
+    Used so analysis_results.json stores portable relative paths instead of
+    absolute machine-specific ones. Falls back to the original string if the
+    path is not under ``base`` (e.g. already relative or on another root).
+    """
+    try:
+        # as_posix() => forward slashes, portable across Windows/Linux.
+        return Path(path).resolve().relative_to(Path(base).resolve()).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
+# A case_id is used to build filesystem paths (ANALYSIS_FOLDER / case_id), so
+# restrict it to a safe charset to prevent path traversal / injection.
+CASE_ID_RE = re.compile(r'^[A-Za-z0-9_]+$')
+
+
+def is_valid_case_id(case_id):
+    """Return True only if case_id is a non-empty alphanumeric/underscore string."""
+    return bool(case_id) and bool(CASE_ID_RE.match(case_id))
+
+
+@app.before_request
+def validate_case_id_param():
+    """Reject any request whose case_id path param contains unsafe characters."""
+    case_id = (request.view_args or {}).get('case_id')
+    if case_id is not None and not is_valid_case_id(case_id):
+        logger.warning("Rejected invalid case_id path param: %r", case_id)
+        return jsonify({'error': 'Invalid case_id'}), 400
+
+
 active_jobs = {}
 completed_jobs = {}
+# Guards all reads/writes of active_jobs and completed_jobs, which are touched
+# by both request handlers and the background analysis thread.
+jobs_lock = Lock()
+
+# --- Lightweight SQLite persistence for jobs (no ORM) ----------------------
+# Survives restarts: jobs are mirrored into a single table keyed by case_id.
+JOBS_DB_PATH = DATA_DIR / "jobs.db"
+_jobs_db = sqlite3.connect(str(JOBS_DB_PATH), check_same_thread=False)
+_jobs_db.execute(
+    "CREATE TABLE IF NOT EXISTS jobs ("
+    "case_id TEXT PRIMARY KEY, state TEXT NOT NULL, data TEXT NOT NULL)"
+)
+_jobs_db.commit()
+
+
+def persist_job(case_id, job, state):
+    """Insert or update a job's state ('active'/'completed') and JSON payload.
+
+    Callers already hold jobs_lock, which also serializes DB access.
+    """
+    try:
+        _jobs_db.execute(
+            "INSERT INTO jobs (case_id, state, data) VALUES (?, ?, ?) "
+            "ON CONFLICT(case_id) DO UPDATE SET state=excluded.state, data=excluded.data",
+            (case_id, state, json.dumps(job, default=str)),
+        )
+        _jobs_db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist job {case_id}: {e}")
+
+
+def load_persisted_jobs():
+    """Restore jobs from SQLite into the in-memory dicts on startup.
+
+    Any job left in the 'active'/'processing' state from a previous run is
+    marked 'interrupted' (the worker thread didn't survive the restart).
+    """
+    with jobs_lock:
+        for case_id, state, data in _jobs_db.execute("SELECT case_id, state, data FROM jobs"):
+            try:
+                job = json.loads(data)
+            except Exception:
+                continue
+            if state == 'completed':
+                completed_jobs[case_id] = job
+            else:
+                job['status'] = 'interrupted'
+                active_jobs[case_id] = job
+    logger.info(f"Restored {len(active_jobs)} active, {len(completed_jobs)} completed jobs from SQLite")
+
+
+load_persisted_jobs()
 
 analysis_clients = {}
 analysis_clients_lock = Lock()
@@ -66,6 +199,9 @@ reidentifier = PersonReidentifier()
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")  # Get from environment variable
 MODEL_ID = "google/flan-t5-base"  # Using a more capable model within free tier
 
+# Fallback user identifier when a request doesn't supply one (configurable).
+DEFAULT_USER = os.environ.get("DEFAULT_USER", "unknown_user")
+
 hf_client = None
 if HF_API_TOKEN:
     try:
@@ -75,6 +211,62 @@ if HF_API_TOKEN:
         logger.error(f"Failed to initialize Hugging Face client: {e}")
 else:
     logger.warning("No HF_API_TOKEN provided. Chat feature will run in demo mode.")
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health/readiness probe: model load status, disk space, and job counts."""
+    # Model load status. Each model object exposes its underlying loaded model
+    # via a `.model` attribute; treat "loaded" as the object and its model
+    # both being present.
+    def _loaded(obj):
+        try:
+            return obj is not None and getattr(obj, 'model', obj) is not None
+        except Exception:
+            return False
+
+    models = {
+        'object_detector': _loaded(detector),
+        'object_tracker': tracker is not None,
+        'person_reidentifier': _loaded(reidentifier),
+        'hf_chat_client': hf_client is not None,
+    }
+    # Core CV models must be loaded for the service to be usable; the HF chat
+    # client is optional (demo mode without a token).
+    models_ready = all(
+        models[k] for k in ('object_detector', 'object_tracker', 'person_reidentifier')
+    )
+
+    # Disk space on the volume holding uploads/analysis output.
+    try:
+        usage = shutil.disk_usage(str(DATA_DIR))
+        disk = {
+            'total_mb': round(usage.total / (1024 * 1024), 1),
+            'used_mb': round(usage.used / (1024 * 1024), 1),
+            'free_mb': round(usage.free / (1024 * 1024), 1),
+            'percent_used': round(usage.used / usage.total * 100, 1) if usage.total else None,
+        }
+        disk_ok = usage.free > 500 * 1024 * 1024  # warn if under 500 MiB free
+    except OSError as e:
+        disk = {'error': str(e)}
+        disk_ok = False
+
+    # Job counts (guarded by the same lock as the dicts themselves).
+    with jobs_lock:
+        jobs = {
+            'active': len(active_jobs),
+            'completed': len(completed_jobs),
+        }
+
+    healthy = models_ready and disk_ok
+    body = {
+        'status': 'ok' if healthy else 'degraded',
+        'models': models,
+        'disk': disk,
+        'jobs': jobs,
+        'timestamp': datetime.now().isoformat(),
+    }
+    return jsonify(body), 200 if healthy else 503
+
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -134,7 +326,9 @@ def get_cases():
                 except Exception as e:
                     logger.error(f"Error loading case {case_dir.name}: {e}")
     
-    for job_id, job in active_jobs.items():
+    with jobs_lock:
+        active_snapshot = list(active_jobs.items())
+    for job_id, job in active_snapshot:
         cases.append({
             'case_id': job_id,
             'case_name': job.get('case_name', job_id),  # Use case_name if available
@@ -185,14 +379,16 @@ def get_case_by_name_endpoint(case_name):
 def get_case(case_id):
     """Get details for a specific case."""
     # Check if it's an active job
-    if case_id in active_jobs:
+    with jobs_lock:
+        job = active_jobs.get(case_id)
+    if job is not None:
         return jsonify({
             'case_id': case_id,
-            'case_name': active_jobs[case_id].get('case_name', case_id),  # Include case_name
+            'case_name': job.get('case_name', case_id),  # Include case_name
             'status': 'processing',
-            'progress': active_jobs[case_id].get('progress', 0),
-            'video_path': active_jobs[case_id].get('video_path', ''),
-            'timestamp': active_jobs[case_id].get('start_time', '')
+            'progress': job.get('progress', 0),
+            'video_path': job.get('video_path', ''),
+            'timestamp': job.get('start_time', '')
         })
     
     case_dir = ANALYSIS_FOLDER / case_id
@@ -267,142 +463,54 @@ def get_visualization(case_id, filename):
 
 @app.route('/api/cases/<case_id>/output_video', methods=['GET'])
 def get_output_video(case_id):
-    """Get the output video for a case with proper download headers."""
-    user = request.args.get('user', 'unknown_user')
+    """Serve a case's output video.
+
+    Pass ?download=true to receive it as a file attachment (with no-cache
+    headers); otherwise it is served inline for viewing.
+    """
+    user = request.args.get('user', DEFAULT_USER)
     download_mode = request.args.get('download', 'false').lower() == 'true'
-    
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     logger.info(f"[{current_time}] Video request for case {case_id} by user {user}, download mode: {download_mode}")
-    
-    case_dir = ANALYSIS_FOLDER / case_id
-    video_path = case_dir / "output_video.mp4"
-    
-    # Get case name for better filename
-    result_file = case_dir / "analysis_results.json"
-    case_name = None
-    if result_file.exists():
-        try:
-            with open(result_file, 'r') as f:
-                case_data = json.load(f)
-            case_name = case_data.get('case_name')
-        except Exception as e:
-            logger.error(f"Error reading case name: {e}")
-    
-    original_filename = case_name or "analyzed_video"
-    
-    import re
-    original_filename = re.sub(r'[^\w\s-]', '', original_filename).strip().replace(' ', '_')
-    
-    download_filename = f"{original_filename}.mp4"
-    
-    if not video_path.exists():
-        logger.warning(f"Output video not found at: {video_path}")
-        # Try to find any mp4 file
-        for video_file in case_dir.glob("*.mp4"):
-            logger.info(f"Found alternate video file: {video_file}")
-            
-            if download_mode:
-                response = send_from_directory(
-                    case_dir, 
-                    video_file.name,
-                    as_attachment=True,
-                    download_name=download_filename,
-                    mimetype="video/mp4"
-                )
-                response.headers["Content-Disposition"] = f"attachment; filename={download_filename}"
-                response.headers["X-Content-Type-Options"] = "nosniff"
-                logger.info(f"[{current_time}] Serving alternate video for download: {video_file}")
-                return response
-            else:
-                # For viewing, just serve normally
-                return send_from_directory(case_dir, video_file.name)
-        
-        return jsonify({'error': 'Output video not found'}), 404
-    
-    # Decide whether to serve for viewing or downloading
-    if download_mode:
-        logger.info(f"[{current_time}] Serving video for download: {video_path}")
-        response = send_from_directory(
-            case_dir, 
-            "output_video.mp4",
-            as_attachment=True,
-            download_name=download_filename,
-            mimetype="video/mp4"
-        )
-        # Add additional headers for download
-        response.headers["Content-Disposition"] = f"attachment; filename={download_filename}"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
-    else:
-        # For viewing, just serve normally
-        logger.info(f"[{current_time}] Serving video for viewing: {video_path}")
-        return send_from_directory(case_dir, "output_video.mp4")
 
-# Add a dedicated download endpoint for better compatibility
-@app.route('/api/cases/<case_id>/download_video', methods=['GET'])
-def download_output_video(case_id):
-    """Dedicated endpoint for downloading the analyzed video."""
-    user = request.args.get('user', 'aaravgoel0')  # Default to the provided username
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    logger.info(f"[{current_time}] Video download requested for case {case_id} by user {user}")
-    
     case_dir = ANALYSIS_FOLDER / case_id
-    video_path = case_dir / "output_video.mp4"
-    
-    # Get case name for better filename
-    result_file = case_dir / "analysis_results.json"
+
+    # Resolve the case name for a friendly download filename.
     case_name = None
+    result_file = case_dir / "analysis_results.json"
     if result_file.exists():
         try:
             with open(result_file, 'r') as f:
-                case_data = json.load(f)
-            case_name = case_data.get('case_name')
+                case_name = json.load(f).get('case_name')
         except Exception as e:
             logger.error(f"Error reading case name: {e}")
-    
-    # Generate a meaningful filename for download
-    original_filename = case_name or "analyzed_video"
-    
-    # Clean up filename to ensure it's valid
-    import re
-    original_filename = re.sub(r'[^\w\s-]', '', original_filename).strip().replace(' ', '_')
-    
-    download_filename = f"{original_filename}.mp4"
-    
-    if not video_path.exists():
-        logger.warning(f"Output video not found at: {video_path}")
-        # Try to find any mp4 file
-        for video_file in case_dir.glob("*.mp4"):
-            logger.info(f"Found alternate video file: {video_file}")
-            
-            response = send_from_directory(
-                case_dir, 
-                video_file.name,
-                as_attachment=True,
-                download_name=download_filename,
-                mimetype="video/mp4"
-            )
-            response.headers["Content-Disposition"] = f"attachment; filename={download_filename}"
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-            logger.info(f"[{current_time}] Serving alternate video for download: {video_file}")
-            return response
-        
-        return jsonify({'error': 'Output video not found'}), 404
-    
-    # Serve for download with appropriate headers
-    logger.info(f"[{current_time}] Serving video for download: {video_path}")
+    safe_name = re.sub(r'[^\w\s-]', '', case_name or "analyzed_video").strip().replace(' ', '_')
+    download_filename = f"{safe_name}.mp4"
+
+    # Locate the video: prefer the standard name, else any .mp4 in the dir.
+    if (case_dir / "output_video.mp4").exists():
+        video_name = "output_video.mp4"
+    else:
+        logger.warning(f"Output video not found at: {case_dir / 'output_video.mp4'}")
+        video_name = next((f.name for f in case_dir.glob("*.mp4")), None)
+        if video_name is None:
+            return jsonify({'error': 'Output video not found'}), 404
+        logger.info(f"Using alternate video file: {video_name}")
+
+    # Inline viewing: serve normally.
+    if not download_mode:
+        logger.info(f"[{current_time}] Serving video for viewing: {case_dir / video_name}")
+        return send_from_directory(case_dir, video_name)
+
+    # Download: serve as an attachment with no-cache headers.
+    logger.info(f"[{current_time}] Serving video for download: {case_dir / video_name}")
     response = send_from_directory(
-        case_dir, 
-        "output_video.mp4",
+        case_dir,
+        video_name,
         as_attachment=True,
         download_name=download_filename,
-        mimetype="video/mp4"
+        mimetype="video/mp4",
     )
-    # Add additional headers for download
     response.headers["Content-Disposition"] = f"attachment; filename={download_filename}"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -617,8 +725,14 @@ def upload_video():
     case_dir = ANALYSIS_FOLDER / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
     
+    # Sanitize the client-supplied filename to keep the file inside
+    # UPLOAD_FOLDER (strips path separators / traversal sequences).
+    safe_filename = secure_filename(file.filename)
+    if not safe_filename:
+        return jsonify({'error': 'Invalid file name'}), 400
+
     # Save the uploaded file
-    video_path = UPLOAD_FOLDER / file.filename
+    video_path = UPLOAD_FOLDER / safe_filename
     file.save(video_path)
     logger.info(f"File uploaded: {video_path} for case {case_id} with name '{case_name}'")
     
@@ -637,14 +751,22 @@ def analyze_video():
     if not data or 'video_path' not in data:
         return jsonify({'error': 'No video path provided'}), 400
     
-    video_path = data['video_path']
-    if not os.path.exists(video_path):
+    # Validate the path is inside UPLOAD_FOLDER before any filesystem use,
+    # to prevent path injection / traversal (e.g. "/etc/passwd", "..\\..").
+    video_path = resolve_upload_path(data['video_path'])
+    if video_path is None:
+        return jsonify({'error': 'Invalid video path'}), 400
+    if not os.path.isfile(video_path):
         return jsonify({'error': 'Video file not found'}), 404
     
     # Get case name and case ID
     case_name = data.get('case_name', '')
     case_id = data.get('case_id')
-    
+
+    # A client-supplied case_id becomes a directory name; reject unsafe values.
+    if case_id is not None and not is_valid_case_id(case_id):
+        return jsonify({'error': 'Invalid case_id'}), 400
+
     # Create a unique job ID if not provided
     if not case_id:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -675,12 +797,13 @@ def analyze_video():
         job['case_details'] = data['case_details']
     
     # Add to active jobs
-    active_jobs[case_id] = job
-    
+    with jobs_lock:
+        active_jobs[case_id] = job
+        persist_job(case_id, job, 'active')
+
     logger.info(f"Starting analysis job for case {case_id} '{case_name}', video: {video_path}")
     
     # Start analysis in background
-    import threading
     thread = threading.Thread(target=run_analysis, args=(case_id, case_name, video_path, output_dir, data.get('case_details')))
     thread.daemon = True
     thread.start()
@@ -841,14 +964,12 @@ def chat_with_case():
         if 'case_name' not in case_data:
             case_data['case_name'] = case_data.get('case_name', case_id)
         
-        # Import our enhanced chat service and generate response
+        # Generate the chat response (generate_chat_response imported at module level).
         try:
-            # First try to import in a way that avoids circular imports
-            from chat_service import generate_chat_response
             response_text = generate_chat_response(case_id, case_data, message)
-        except ImportError:
-            # If the import fails, define a fallback function
-            logger.warning("Failed to import chat_service, using fallback response")
+        except Exception as chat_err:
+            # Fall back to a canned response if generation fails.
+            logger.warning(f"chat_service failed, using fallback response: {chat_err}")
             case_name = case_data.get('case_name', f"case #{case_id}")
             response_text = f"I can answer questions about the case '{case_name}'. This case contains {len(case_data.get('person_identities', []))} persons. Please ask a specific question about the video or persons detected."
         
@@ -877,11 +998,14 @@ def analysis_events(case_id):
         
         try:
             # Send initial status
-            if case_id in active_jobs:
-                progress = active_jobs[case_id].get('progress', 0)
-                status = active_jobs[case_id].get('status', 'processing')
+            with jobs_lock:
+                job = active_jobs.get(case_id)
+                is_completed = case_id in completed_jobs
+            if job is not None:
+                progress = job.get('progress', 0)
+                status = job.get('status', 'processing')
                 yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
-            elif case_id in completed_jobs or (ANALYSIS_FOLDER / case_id).exists():
+            elif is_completed or (ANALYSIS_FOLDER / case_id).exists():
                 # If already completed or exists as a directory
                 yield f"data: {json.dumps({'status': 'completed', 'progress': 100})}\n\n"
             else:
@@ -891,19 +1015,22 @@ def analysis_events(case_id):
             timeout = time.time() + 1800  # 30 minutes max
             while time.time() < timeout:
                 # Check if analysis is still active
-                if case_id in active_jobs:
-                    progress = active_jobs[case_id].get('progress', 0)
-                    status = active_jobs[case_id].get('status', 'processing')
+                with jobs_lock:
+                    job = active_jobs.get(case_id)
+                    is_completed = case_id in completed_jobs
+                if job is not None:
+                    progress = job.get('progress', 0)
+                    status = job.get('status', 'processing')
                     yield f"data: {json.dumps({'status': status, 'progress': progress})}\n\n"
-                    
+
                     # If status is failed, we're done
                     if status == 'failed':
-                        error = active_jobs[case_id].get('error', 'Unknown error')
+                        error = job.get('error', 'Unknown error')
                         yield f"data: {json.dumps({'status': 'failed', 'error': error})}\n\n"
                         break
-                    
+
                 # Check if it's been completed
-                elif case_id in completed_jobs or (ANALYSIS_FOLDER / case_id).exists():
+                elif is_completed or (ANALYSIS_FOLDER / case_id).exists():
                     yield f"data: {json.dumps({'status': 'completed', 'progress': 100})}\n\n"
                     break
                 
@@ -972,7 +1099,6 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
             # Try direct loading approach
             try:
                 # Try to load directly using WeaponDetector to see what happens
-                from backend.models.weapon_detector import WeaponDetector
                 test_detector = WeaponDetector()
                 logger.info(f"Direct WeaponDetector creation: {'success' if test_detector is not None else 'failed'}")
                 logger.info(f"Model loaded: {'yes' if test_detector.model is not None else 'no'}")
@@ -988,7 +1114,9 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
 
     try:
         # Update job status
-        active_jobs[case_id]['status'] = 'processing'
+        with jobs_lock:
+            active_jobs[case_id]['status'] = 'processing'
+            persist_job(case_id, active_jobs[case_id], 'active')
         logger.info(f"Starting analysis for case {case_id} '{case_name}', video: {video_path}")
         
         # Check if video file exists
@@ -1130,7 +1258,6 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
         
         # Create a thumbnail for the case
         try:
-            import cv2
             cap = cv2.VideoCapture(video_path)
             # Jump to the middle of the video
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -1155,7 +1282,6 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
                 logger.info(f"Found video file: {video_path}")
                 if video_path.name != "output_video.mp4":
                     # Copy or rename to standard name
-                    import shutil
                     shutil.copy(video_path, output_dir / "output_video.mp4")
                     logger.info(f"Copied {video_path} to {output_dir / 'output_video.mp4'}")
                     break
@@ -1176,8 +1302,9 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
         
         # Add custom fields to the report for debugging
         report["timestamp"] = datetime.now().isoformat()
-        report["video_path"] = str(video_path)
-        report["output_directory"] = str(output_dir)
+        # Store relative paths so the JSON is portable across machines/mounts.
+        report["video_path"] = relativize_path(video_path, DATA_DIR)
+        report["output_directory"] = relativize_path(output_dir, ANALYSIS_FOLDER)
         report["debug_info"] = {
             "total_tracks": len(results.get('tracks', [])),
             "person_tracks": sum(1 for t in results.get('tracks', {}).values() if t.get('class_name', '').lower() == 'person'),
@@ -1211,23 +1338,29 @@ def run_analysis(case_id, case_name, video_path, output_dir, case_details=None):
             json.dump(results, f, indent=2, default=str)
         
         # Update job status
-        active_jobs[case_id]['status'] = 'completed'
-        active_jobs[case_id]['progress'] = 100
-        
+        with jobs_lock:
+            active_jobs[case_id]['status'] = 'completed'
+            active_jobs[case_id]['progress'] = 100
+
         # Notify any waiting clients
         notify_analysis_completion(case_id, 'completed')
-        
+
         # Move to completed jobs
-        completed_jobs[case_id] = active_jobs[case_id].copy()
-        del active_jobs[case_id]
+        with jobs_lock:
+            completed_jobs[case_id] = active_jobs[case_id].copy()
+            del active_jobs[case_id]
+            persist_job(case_id, completed_jobs[case_id], 'completed')
         
         logger.info(f"Analysis completed for case {case_id} '{case_name}'")
     
     except Exception as e:
         logger.error(f"Error in analysis job {case_id} '{case_name}': {e}")
         logger.error(traceback.format_exc())
-        active_jobs[case_id]['status'] = 'failed'
-        active_jobs[case_id]['error'] = str(e)
+        with jobs_lock:
+            if case_id in active_jobs:
+                active_jobs[case_id]['status'] = 'failed'
+                active_jobs[case_id]['error'] = str(e)
+                persist_job(case_id, active_jobs[case_id], 'active')
         
         # Notify any waiting clients about the failure
         notify_analysis_completion(case_id, 'failed', str(e))

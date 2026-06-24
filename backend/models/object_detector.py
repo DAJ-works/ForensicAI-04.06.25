@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import logging
+import traceback
 import cv2
 import torch
 from typing import List, Dict, Optional, Union
@@ -56,7 +57,7 @@ class ObjectDetector:
                 self.device = 'cpu'
                 
             print(f"Loading yolov8{self.model_size} on {self.device}...")
-            self.model = YOLO(f"yolov8s.pt")
+            self.model = YOLO(f"yolov8{self.model_size}.pt")
             
             # Move model to device
             self.model.to(self.device)
@@ -99,60 +100,62 @@ class ObjectDetector:
             
             # Run inference
             results = self.model(image_rgb, verbose=False)
-            
-            # Process results
-            detections = []
-            
-            # Extract results
-            result = results[0]  # Get first result
-            boxes = result.boxes
-            
-            # Process each detection
-            for i, box in enumerate(boxes):
-                # Get box coordinates
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                
-                # Get confidence
-                confidence = float(box.conf.cpu().numpy())
-                
-                # Get class
-                cls_id = int(box.cls.cpu().numpy())
-                class_name = result.names[cls_id]
-                
-                # Special handling for person class
-                if class_name.lower() in ['person']:
-                    # Significantly lower threshold for persons
-                    if confidence < 0.10:  # Very low threshold just for people
-                        continue
-                elif confidence < self.confidence_threshold:
-                    # Skip low confidence detections for other classes
-                    continue
-                
-                # Create detection dictionary
-                detection = {
-                    "box": [float(x1), float(y1), float(x2), float(y2)],
-                    "confidence": float(confidence),
-                    "class_id": cls_id,
-                    "class_name": class_name
-                }
-                
-                # Add box center point
-                box_center_x = (x1 + x2) / 2
-                box_center_y = (y1 + y2) / 2
-                detection["box_center"] = [float(box_center_x), float(box_center_y)]
-                
-                detections.append(detection)
-            
+
+            # Process the single result
+            detections = self._parse_result(results[0])
+
             # Log detection count
             logger.debug(f"Detected {len(detections)} objects with confidence > {self.confidence_threshold}")
-            
+
             return detections
-            
+
         except Exception as e:
             logger.error(f"Error in object detection: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return []
+
+    def _parse_result(self, result) -> List[Dict]:
+        """Convert a single YOLO result into a list of detection dicts.
+
+        Applies a lower confidence threshold for the 'person' class and the
+        configured threshold for all others. Shared by detect() and detect_batch().
+        """
+        detections = []
+        for box in result.boxes:
+            # Get box coordinates. Use .item() / tolist() to extract Python
+            # scalars: numpy 2.x no longer allows float() on a size-1 array.
+            x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
+
+            # Get confidence and class
+            confidence = box.conf.item()
+            cls_id = int(box.cls.item())
+            class_name = result.names[cls_id]
+
+            # Special handling for person class
+            if class_name.lower() in ['person']:
+                # Significantly lower threshold for persons
+                if confidence < 0.10:  # Very low threshold just for people
+                    continue
+            elif confidence < self.confidence_threshold:
+                # Skip low confidence detections for other classes
+                continue
+
+            # Create detection dictionary
+            detection = {
+                "box": [float(x1), float(y1), float(x2), float(y2)],
+                "confidence": float(confidence),
+                "class_id": cls_id,
+                "class_name": class_name
+            }
+
+            # Add box center point
+            box_center_x = (x1 + x2) / 2
+            box_center_y = (y1 + y2) / 2
+            detection["box_center"] = [float(box_center_x), float(box_center_y)]
+
+            detections.append(detection)
+
+        return detections
     
     def detect_batch(self, images: List[np.ndarray]) -> List[List[Dict]]:
         """
@@ -168,12 +171,42 @@ class ObjectDetector:
         List[List[Dict]]
             List of detection lists for each image
         """
-        # Process each image individually
-        batch_detections = []
-        for image in images:
-            detections = self.detect(image)
-            batch_detections.append(detections)
-        
+        if not images:
+            return []
+
+        # Ensure the model is loaded.
+        if self.model is None:
+            logger.error("Model not loaded")
+            self._load_model()
+            if self.model is None:
+                return [[] for _ in images]
+
+        # Output aligned with the input list; invalid images stay [].
+        batch_detections = [[] for _ in images]
+
+        # Collect valid images (RGB) and remember their original positions so
+        # results can be mapped back even if some inputs are skipped.
+        valid_rgb = []
+        valid_indices = []
+        for idx, image in enumerate(images):
+            if image is None or image.size == 0:
+                logger.warning(f"Invalid image at index {idx} provided to detect_batch")
+                continue
+            valid_rgb.append(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            valid_indices.append(idx)
+
+        if not valid_rgb:
+            return batch_detections
+
+        try:
+            # Single native batched forward pass over all valid images.
+            results = self.model(valid_rgb, verbose=False)
+            for pos, result in zip(valid_indices, results):
+                batch_detections[pos] = self._parse_result(result)
+        except Exception as e:
+            logger.error(f"Error in batch object detection: {e}")
+            logger.error(traceback.format_exc())
+
         return batch_detections
     
     def visualize_detections(self, image: np.ndarray, detections: List[Dict], 

@@ -237,31 +237,6 @@ const QuickActionButton = ({ icon, title, onClick, color = "primary" }) => {
   );
 };
 
-// System stats component
-const SystemStatus = () => {
-  const [performance, setPerformance] = useState({
-    cpu: 68,
-    memory: 45,
-    storage: 82,
-  });
-  
-  useEffect(() => {
-    const timer = setInterval(() => {
-      // Simulate changing system metrics
-      setPerformance({
-        cpu: Math.floor(Math.random() * 30) + 60, // 60-90%
-        memory: Math.floor(Math.random() * 20) + 40, // 40-60%
-        storage: 82,
-      });
-    }, 5000);
-    
-    return () => clearInterval(timer);
-  }, []);
-  
-  return 
-  
-};
-
 // Main App component
 function App() {
   const [useDarkMode, setUseDarkMode] = useState(false);
@@ -356,6 +331,7 @@ function App() {
   const drawerItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard', badge: 0 },
     { text: 'Cases', icon: <FolderIcon />, path: '/cases', badge: 2 },
+    { text: 'Search', icon: <SearchIcon />, path: '/search', badge: 0 },
     { text: 'Upload', icon: <CloudUploadIcon />, path: '/upload', badge: 0 },
     { text: 'AI Chat', icon: <ChatIcon />, path: '/chat', badge: 0 }, // Changed from '/cases' to '/chat'
   ];
@@ -402,15 +378,9 @@ function App() {
   
   const drawer = (
     <>
-      
+
       <Divider sx={{ mx: 2, opacity: 0.6 }} />
-      
-      
-      {/* System status panel */}
-      <SystemStatus />
-      
-      <Divider sx={{ mx: 2, my: 1, opacity: 0.6 }} />
-      
+
       {/* Navigation menu */}
       <Box 
         sx={{ 

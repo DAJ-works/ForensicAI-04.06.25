@@ -7,3 +7,4 @@ torch>=1.9.0
 torchvision>=0.10.0
 scipy>=1.7.0
 scikit-learn>=1.0.0
+networkx>=2.6  # camera-topology graph in multi_camera_analyzer

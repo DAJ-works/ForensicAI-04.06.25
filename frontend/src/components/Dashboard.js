@@ -37,7 +37,7 @@ import ChatIcon from '@mui/icons-material/Chat';
 
 // Current date and time (updated as requested)
 const CURRENT_DATE = '2025-04-06 10:02:13';
-const CURRENT_USER = 'aaravgoel0';
+const CURRENT_USER = process.env.REACT_APP_CURRENT_USER || 'unknown_user';
 
 // Styled components for Apple-like design
 const StyledCard = styled(Paper)(({ theme }) => ({
@@ -497,8 +497,8 @@ function Dashboard() {
     setDownloadInProgress(prev => ({ ...prev, [caseId]: true }));
     
     try {
-      // Use the dedicated download endpoint
-      const downloadUrl = `/api/cases/${caseId}/download_video?user=${CURRENT_USER}&t=${Date.now()}`;
+      // Use the output_video endpoint in download mode
+      const downloadUrl = `/api/cases/${caseId}/output_video?download=true&user=${CURRENT_USER}&t=${Date.now()}`;
       
       // Use fetch API to handle the download as a blob
       const response = await fetch(downloadUrl);

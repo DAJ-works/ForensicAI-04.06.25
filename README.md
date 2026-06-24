@@ -36,7 +36,7 @@ Simply upload a CCTV video, and the application will:
 # Tech Stack
 **Frontend**: React, CSS
 
-**Backend**: Python (FastAPI), Node.js
+**Backend**: Python (Flask)
 
 **Video Processing**: OpenCV, YOLOv8, PyTorch
 
@@ -44,27 +44,50 @@ Simply upload a CCTV video, and the application will:
 
 
 # Getting Started
-**Clone the repository**
 
-```git clone https://github.com/your-username/cctv-insight-analyzer.git
-cd cctv-insight-analyzer
-Install dependencies
+### 1. Clone the repository
 
- Backend
-cd backend
+```bash
+git clone https://github.com/your-username/ForensicAI.git
+cd ForensicAI
+```
+
+### 2. Install dependencies
+
+```bash
+# Backend (Python) — run from the repository root
 pip install -r requirements.txt
 
- Frontend
-cd ../frontend
+# Frontend (React)
+cd frontend
 npm install
-Start the application
+cd ..
+```
 
- Run backend
-cd backend
-uvicorn main:app --reload
+### 3. Configure environment variables
 
- Run frontend
-cd ../frontend
+The backend will not start until `API_KEY` and `CORS_ORIGINS` are set.
+
+```bash
+# Backend config
+cp .env.example .env            # then edit .env and fill in API_KEY
+
+# Frontend config
+cp frontend/.env.example frontend/.env
+```
+
+See [.env.example](.env.example) and [frontend/.env.example](frontend/.env.example)
+for all available variables.
+
+### 4. Start the application
+
+```bash
+# Run backend (Flask) — from the repository root.
+# Serves on http://localhost:5000 (override with the PORT env var).
+python backend/api/app.py
+
+# Run frontend (in a separate terminal) — serves on http://localhost:3000
+cd frontend
 npm start
 ```
 ## Use Cases ##

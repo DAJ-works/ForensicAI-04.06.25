@@ -1,0 +1,44 @@
+# Python virtual environments
+source/
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Logs
+*.log
+backend/api/analysis_api.log
+
+# Debug / generated output
+backend/debug_output/
+
+# Runtime data: uploaded videos, analysis output, job DB
+data/
+
+# Model weights (downloaded at runtime / too large for git)
+*.pt
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

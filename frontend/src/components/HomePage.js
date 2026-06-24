@@ -31,7 +31,7 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 
 // Current date and user info (updated with the exact values provided)
 const CURRENT_DATE = '2025-04-06 10:53:33';
-const CURRENT_USER = 'aaravgoel0';
+const CURRENT_USER = process.env.REACT_APP_CURRENT_USER || 'unknown_user';
 
 // Styled Components
 const HeroSection = styled(Box)(({ theme }) => ({

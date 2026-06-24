@@ -24,7 +24,7 @@ function CaseDetail() {
   const [snackbarSeverity, setSnackbarSeverity] = useState('info');
 
   // Current user and timestamp for logging
-  const currentUser = "aaravgoel0";
+  const currentUser = process.env.REACT_APP_CURRENT_USER || 'unknown_user';
   const currentDate = "2025-04-06 09:01:50";
 
   useEffect(() => {
@@ -62,7 +62,7 @@ function CaseDetail() {
       setDownloadingVideo(true);
       
       // Use the dedicated download endpoint
-      const downloadUrl = `/api/cases/${caseId}/download_video?user=aaravgoel0&t=${Date.now()}`;
+      const downloadUrl = `/api/cases/${caseId}/output_video?download=true&user=${encodeURIComponent(currentUser)}&t=${Date.now()}`;
       
       // Use fetch API to handle the download as a blob
       const response = await fetch(downloadUrl);
