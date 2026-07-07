@@ -108,11 +108,6 @@ Our RAG system processes video analysis results to enable context-aware conversa
 - A specialized prompt template incorporates retrieved context
 - Multi-stage retrieval ensures the most relevant information is provided
 
-## Custom YOLOv8 Weapon Detection Model ##
-
-- We trained a specialized YOLOv8 model for weapon detection
-- Training Methodology: Trained for 50 epochs using google collab GPU
-
 ## Future Work ###
 - Integration with live video feeds
 - Multi-camera synchronization and analysis
